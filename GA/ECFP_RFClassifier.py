@@ -16,7 +16,7 @@ RANDOM_STATE = 55 ## We will pass it to every sklearn call so we ensure reproduc
 
 
 def is_transition_metal(at):
-    """ 
+    """     
     Checks if an atom is a transition metal
     """
     n = at.GetAtomicNum()
@@ -24,6 +24,9 @@ def is_transition_metal(at):
 
 def set_dative_bonds(mol):
     """ 
+    Author: Greg Landrum
+    Source: https://gist.github.com/greglandrum/6cd7aadcdedb1ebcafa9537e8a47e3a4
+    
     Identifies and flags the dative bonds
     Replaces all the bonds between the tranistion metal and atoms with dative bonds. 
 
