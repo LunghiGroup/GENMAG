@@ -5,7 +5,7 @@ from operator import itemgetter
 import random
 import selfies as sf
 from rdkit import RDLogger  
-from .ECFP_RFClassifier import query_RF
+from .ECFP_RFClassifier import query_RF,query_Compass_RF
 import os
 import shutil
 import h5py
@@ -169,7 +169,7 @@ def random_Selfie(minl,maxl,binding=True):
         randomly generated selfie of required length with connecting atom in the beginning.
 
     """
-    binders=['[O]','[N]']#,'[C-1]']
+    binders=['[O]','[N]', '[O-1]', '[NH1-1]']
     atoms=['[=C]', '[Cl]', '[I]', '[Br]', '[=O]', '[=P]', '[#C]', '[C]', '[#N]', '[O]', '[B]', '[=S]', '[=N]', '[F]', '[=B]', '[#P]', '[N]', '[#B]', '[P]', '[S]']
     operators=['[Branch1]','[=Branch1]','[#Branch1]','[Branch2]','[=Branch2]','[#Branch2]', '[Ring1]', '[=Ring1]', '[Ring2]', '[=Ring2]']
     operators=['[Branch1]','[Ring1]']
@@ -446,8 +446,6 @@ class speciman_semi_dynamic(speciman):
             self.genome=genome
     def get_compound(self):
         """
-        
-
         Returns
         -------
         compound : STRING
@@ -480,7 +478,7 @@ class speciman_semi_dynamic(speciman):
                 elif mutat_type==1 and len(Selfietokens)<self.maxl:#add Token
                     pos=np.random.randint(1,len(Selfietokens))
                     Selfietokens.insert(pos,random.sample(Selfie_alphabet,1)[0])
-                elif mutat_type==2:
+                elif mutat_type==2:#replaces Token
                     new_gene=random.sample(Selfie_alphabet,1)[0]
                     Selfietokens[np.random.randint(1,len(Selfietokens))]=new_gene
                 new_Selfie="".join(Selfietokens)
@@ -522,7 +520,7 @@ class speciman_semi_dynamic(speciman):
         return([child1, child2])
 
 class genetic_optimizer:
-    def __init__(self,ligand_list,popsize,max_generation,mutation_rate,fitness_function,gene_length,ligand_path, work_path, storage_path):
+    def __init__(self,ligand_list,popsize,max_generation,mutation_rate,fitness_function,gene_length,ligand_path, work_path, storage_path, model=None):
         """
         Main Class of the genetic algorithm. It performs the loop of optimization based on a given 
         fitness function, and contains information on fitness growth, current population etc.
@@ -555,7 +553,7 @@ class genetic_optimizer:
         self.gene_length=gene_length
         self.current_ID=0
         self.placeholder_cost=100
-        
+        self.model=model
         self.generations=0
         
         #Parameters not saved in HDF5 file:
@@ -616,11 +614,15 @@ class genetic_optimizer:
         """
         Generates first generation of randomly created speciman
         """
-        for i in range(self.popsize):
+        while len(self.population) < self.popsize:
             pop=self.speciman_type("random",self.gen_info,self.gene_length)
-            pop.ID=self.node_counter
-            self.node_counter+=1
-            self.population.append(pop)
+            
+            
+            if self.model==None or query_Compass_RF(self.model, [pop.genome[0]], [pop.genome[1]])[0]==1:
+                pop.ID=self.node_counter
+                self.node_counter+=1
+                self.population.append(pop)
+            
             
     
     def parent_select(self):
@@ -651,32 +653,21 @@ class genetic_optimizer:
             for child in children:
                 if not "".join(child.genome) in self.known_compounds:
                     if not "".join(child.genome) in self.known_compounds:
-                        self.known_compounds.append("".join(child.genome))
-                    child.ID=self.node_counter
-                    self.node_counter+=1
-                    new_pop.append(child)
+                        l1=child.genome[0]
+                        l2=child.genome[1]
+                        if self.model==None or query_Compass_RF(self.model, [l1], [l2])[0]==1:
+                            self.known_compounds.append("".join(child.genome))
+                            child.ID=self.node_counter
+                            self.node_counter+=1
+                            new_pop.append(child)
+                    
                     
                 if len(new_pop)==self.popsize:
                     break
             breed_counter+=1
-            
-        while len(new_pop)<self.popsize and breed_counter<self.max_breed:
-            parent1=parents[np.random.randint(0,len(parents))]
-            parent2=parents[np.random.randint(0,len(parents))]
-            children=parent1.crossover_mutate(self.mutation_rate,parent2)
-            for child in children:
-                if not compare_genomes(child,new_pop, "list_index"):
-                #if not "".join(child.genome) in self.known_compounds:
-                    if not "".join(child.genome) in self.known_compounds:
-                        self.known_compounds.append("".join(child.genome))
-                    child.ID=self.node_counter
-                    self.node_counter+=1
-                    new_pop.append(child)
-                    
-                if len(new_pop)==self.popsize:
-                    break
-            breed_counter+=1
+        
         self.population=new_pop
+        
             
     def get_information(self):
         """
@@ -826,6 +817,73 @@ class genetic_optimizer:
             f.close()
         return(self.parent_select()[0])
     
+    def run_simulation_known(self, fitness_parameters,threshhold, hdf5_file_name="local",max_gen=-1):
+        """
+        Starts simulation of genetic algorithm. Performs a number of iterations using self.fitness_function, by using the fitness parameters. 
+        Automatically updates self.info, and writes information and final xyz coordinates in hdf5 file.
+        Parameters
+        ----------
+        fitness_parameters : LIST
+            List of parameters that are handed to fitness function. Usually contains computational details, database for benchmarks etc.
+        hdf5_file_name : STRING
+            Full path to hdf5 file to be written into.
+        max_gen : INT, optional
+            Optional: Number of generations to be performed in this run. Does not overwrite maximum number of generations. 
+            Can be set to -1 to continue until maximum number is reached.
+
+        """
+        
+        if max_gen==-1:
+            max_gen=self.max_generation
+            
+        
+        if not os.path.isdir(self.work_path):
+            os.mkdir(self.work_path)
+        if not os.path.isdir(self.storage_path):
+            os.mkdir(self.storage_path)
+        
+        if hdf5_file_name=="local":
+            hdf5_file_name="{}/OutputFile.hdf5".format(os.getcwd())
+        file=h5py.File(hdf5_file_name,"w")
+        number_of_specimen=int(self.popsize*(1+self.max_generation/2))
+        print(number_of_specimen)
+        dset = file.create_dataset("Compounds", (number_of_specimen), dtype=get_Idt(self.gene_length))
+        dset.attrs["current_population"]=list(range(self.popsize))
+        dset.attrs["current_ID"]=0
+        dset.attrs["popsize"]=self.popsize
+        dset.attrs["gene_length"]=self.gene_length
+        dset.attrs["mutation_rate"]=self.mutation_rate
+        dset.attrs["max_generation"]=self.max_generation
+        dset.attrs["number_ligands"]=len(self.ligand_list)
+        dset.attrs["placeholder"]=self.placeholder_cost
+        dset.attrs["generations"]=0
+        dset2 = file.create_dataset("Growth", (self.max_generation+1,3),dtype="f4")
+        file.close()
+        
+        self.init_first_gen()
+        charges, multiplicity, D_values, compounds=self.evaluate_fitness(self.population,fitness_parameters)
+        self.save_coordinates(self.population,hdf5_file_name, charges, multiplicity, D_values, compounds)
+        self.get_information()
+        f=h5py.File(hdf5_file_name,"r+")
+        dset=f["Growth"]
+        dset[0]=self.info[0]
+        f.close()
+        for gen in range(max_gen):
+            self.update_population()
+            charges, multiplicity, D_values, compounds=self.evaluate_fitness(self.population[int(self.popsize/2):],fitness_parameters)
+            f=h5py.File(hdf5_file_name,"r+")
+            self.generations+=1
+            self.save_coordinates(self.population[int(self.popsize/2):], hdf5_file_name, charges, multiplicity, D_values, compounds)
+            self.get_information()
+            dset=f["Growth"]
+            dset[gen+1]=self.info[-1]
+            f["Compounds"].attrs["generations"]=self.generations
+            if self.info[-1][0]<=threshhold:
+                print("found the magic number")
+                break
+            f.close()
+        return(self.parent_select()[0])
+    
              
         
 class genetic_optimizer_semi_dynamic(genetic_optimizer):
@@ -913,6 +971,7 @@ class genetic_optimizer_semi_dynamic(genetic_optimizer):
         
         file=h5py.File(hdf5_file_name,"w")
         number_of_specimen=int(self.popsize*(1+self.max_generation/2))
+        
         dset = file.create_dataset("Compounds", (number_of_specimen), dtype=get_Idt(self.gene_length))
         dset.attrs["current_population"]=list(range(self.popsize))
         dset.attrs["current_ID"]=0
@@ -991,4 +1050,3 @@ class genetic_optimizer_semi_dynamic(genetic_optimizer):
                 pop.ID=self.node_counter
                 self.node_counter+=1
                 self.population.append(pop)
-        

@@ -113,6 +113,42 @@ def query_RF(model, smiles1, smiles2):
     prediction= model.predict(X_test)
     return(prediction)
 
+def query_Compass_RF(model, l1, l2, filename=""):
+    """
+    Parameters
+    ----------
+    model : TYPE
+        pre trained random forest model
+    Smile1 : String
+        Smile of first ligand
+    Smile2 : String
+        Smile of second ligand
+
+    Returns
+    -------
+    Integer indicating the class of the compound.
+
+    """
+    if type(model)==dict:
+        prediction=[model["{}_{}".format(l1[i],l2[i])] for i in range(len(l1))]
+        return prediction
+    fpSize = 4096 # This is the length of the fingerprint 
+    radius= 5 # This identifies the no. of neighbors to be considered in building the fingerprints
+    
+    with open(filename,"r") as f:
+        lines=f.readlines()
+    smile_database={}
+    for line in lines:
+        key,smile=line.split()
+        smile_database[key]=smile
+    smiles1 = [smile_database[l] for l in l1]
+    smiles2 = [smile_database[l] for l in l2]
+    GA_fp = [mol_assemble(smiles1[i],smiles2[i],fpSize,radius) for i in range(len(smiles1))]
+    X_test = pd.DataFrame(GA_fp)
+    
+    prediction= model.predict(X_test)
+    return(prediction)
+
 def RF_model(path_to_GA_file,path_to_training_X,path_to_training_Y):
     """
     Trains the RandomForestClassifier model and predicts the class each GA newly generated molecule belongs to.
@@ -186,3 +222,4 @@ def RF_model(path_to_GA_file,path_to_training_X,path_to_training_Y):
 if __name__ == "__main__":
     #Test:
     predict, model = RF_model('/home/lion/Documents/GeneticAlgorithmDev/GA_test_2.txt','/home/lion/Documents/GeneticAlgorithmDev/fingerprints.csv','/home/lion/Documents/GeneticAlgorithmDev/D_val.csv')
+    
